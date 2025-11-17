@@ -1,4 +1,4 @@
-# CCollections
+# Cylibx
 
 This library was inspired by Sean Barrett's [stb single header libraries](https://github.com/nothings/stb) and by this Youtube video by Dylan Falconer [Dynamic Arrays in C](https://www.youtube.com/watch?v=_KSKH8C9Gf0)
 

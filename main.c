@@ -1226,9 +1226,9 @@ void __binheap_expand(void** heap_ptr, size_t n) {
 	free(head);
 	*heap_ptr = new_heap;
 }
-#define get_left_child(n) (((n) << 1) + 1)
-#define get_right_child(n) (((n) << 1) + 2)
-#define get_parent(n) (((n) - 1) >> 1)
+#define __get_left_child(n) (((n) << 1) + 1)
+#define __get_right_child(n) (((n) << 1) + 2)
+#define __get_parent(n) (((n) - 1) >> 1)
 void __binheap_insert(void** heap_ptr, void* val) {
 	void* heap = *heap_ptr;
 	__BinaryHeapHeader* head = BINHEAP_GET_HEADER(heap);
@@ -1239,12 +1239,12 @@ void __binheap_insert(void** heap_ptr, void* val) {
 	}
 
 	size_t pos = head->len++;
-	size_t parent_pos = get_parent(pos);;
+	size_t parent_pos = __get_parent(pos);;
 	while (pos) {
 		if (__PTR_CMP(head, val, (char*)heap + parent_pos * head->size) != -1) { break; }
 		memcpy(__DATA_GET_AT(head, heap, pos), __DATA_GET_AT(head, heap, parent_pos), head->size);
 		pos = parent_pos;
-		parent_pos = get_parent(pos);
+		parent_pos = __get_parent(pos);
 	}
 	memcpy(__DATA_GET_AT(head, heap, pos), val, head->size);
 }
@@ -1252,7 +1252,24 @@ void __binheap_insert(void** heap_ptr, void* val) {
 	typeof(*heap) v = val; \
 	__binheap_insert((void**)&(heap), &v); \
 } while(0)
-void binheap_isnert_mult_n();
+void __binheap_insert_mult_n(void** heap_ptr, size_t n, void* mult) {
+	void* heap = *heap_ptr;
+	__BinaryHeapHeader* head = BINHEAP_GET_HEADER(heap);
+	if (head->cap < n + head->len) {
+		__binheap_expand(heap_ptr, n);
+		heap = *heap_ptr;
+		head = BINHEAP_GET_HEADER(heap);
+	}
+
+	for (size_t i = 0; i < n; ++i) {
+		__binheap_insert(heap_ptr, __DATA_GET_AT(head, mult, i));
+	}
+}
+#define binheap_insert_mult_n(heap, n, mult) __binheap_insert_mult_n((void**)&(heap), n, mult)
+#define binheap_insert_mult(heap, ...) do { \
+	typeof(*heap) mult[] = { __VA_ARGS__ }; \
+	__binheap_insert_mult_n((void**)&(heap), sizeof(mult)/sizeof(*mult), mult); \
+} while(0)
 void* __binheap_extract(void* heap) {
 	assert(heap);
 	__BinaryHeapHeader* head = BINHEAP_GET_HEADER(heap);
@@ -1262,9 +1279,9 @@ void* __binheap_extract(void* heap) {
 	__swap(heap, __DATA_GET_AT(head, heap, head->len), head->size);
 	size_t curr = 0;
 	while (curr < head->len) {
-		size_t left = get_left_child(curr);
+		size_t left = __get_left_child(curr);
 		if (left >= head->len) { break; }
-		size_t right = get_right_child(curr);
+		size_t right = __get_right_child(curr);
 		if (right < head->len) {
 			if (__PTR_CMP_POS(head, heap, left, right) == -1) {
 				if (__PTR_CMP_POS(head, heap, curr, left) == 1) {
@@ -1339,7 +1356,6 @@ int int_compare_op(const void* a, const void* b) { return int_compare(a, b) * -1
 void int_print(const void* n) { printf("%d", *(int*)n); }
 void int_pow(void* dst, const void* src) { *(int*)dst = *(int*)src * *(int*)src; }
 int int_filter(const void* n) { return *(int*)n % 2; }
-
 int int_eq(const void* const a, const void* const b) { return *(int*)a == *(int*)b; }
 
 void set_has_string(char** set, const char* str) {
