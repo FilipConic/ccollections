@@ -14,7 +14,7 @@ List of supported data structures:
  - binary heap
  - ring buffer
 
-## How to use the datastructures
+## How to use the data structures
 
 A simple example using *arrays*:
 
@@ -51,11 +51,13 @@ A more complex example using a *hashset*:
     hashset_free(result);
 ```
 
-Output: `{ 3, 2, 4, 1 } n { 4, 5, 3 } = { 3, 4 }`
+Output:
+`{ 3, 2, 4, 1 } n { 4, 5, 3 } = { 3, 4 }`
 
 Even more complex example showing how to use the defer options and *hashmaps*:
 
-Structure with fields key and value has to be created before use: `typedef struct { [void*] key; [void*] value; } KV;`
+Structure with fields key and value has to be created before use (`void*` represent any value):
+`typedef struct { [void*] key; [void*] value; } KV;`
 
 ```
 typedef struct {
@@ -86,14 +88,14 @@ typedef struct {
     hashmap_free(map);
 ```
 
-Everything that is dynamically allocated in this examples is freed correctly! The *hashmap* is the most complex structure and it takes just a bit more setup than the other structures. Well if you have a repeating `hashmap_new` call you can always put it behind a macro! As the example show you can use a foreach loop. For structures like *hashmap* and *hashset* these are required but for others they are a nice thing to have.
+Everything that is dynamically allocated in this examples is freed correctly! The *hashmap* is the most complex structure and it takes just a bit more setup than the other structures. Well if you have a repeating `hashmap_new` call you can always put it behind a macro! As the example shown you can use a foreach loop. For structures like *hashmap* and *hashset* these are required, but for others they are a nice thing to have.
 
 ## Important notices about using the library:
  - to use the library you need to add `#define CCOLLECTIONS_IMPLEMENTATION` above your `#include` macro for this library
  - the `.is_ptr` or `.is_key_ptr` or `.is_value_ptr` are flags that you need to set to *1* if you store a pointer to your data structure inside the data structure you are calling defer from
  - the `hash` and `equality` functions that need to be provided to `hashmap_new` are meant to be used for the *key* of the *hashmap*
- - the `cmp` function that needs to be provided to some the data structures expects < to return -1, > to return 1 and == to return 0
- - if you want to swap a *minheap* for a *maxheap* you need to change `cmp` function to return the opposite values, same for sorting an *array*
+ - the `cmp` function that needs to be provided to some of the data structures expects < to return -1, > to return 1 and == to return 0
+ - if you want to swap a *minheap* for a *maxheap* you need to change `cmp` function to return the opposite values, same for sorting an *array* to sort descendingly
 
 ## TODOs
  - [ ] actually seperate code to be usable as a single header only library

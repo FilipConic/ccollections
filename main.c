@@ -1150,6 +1150,65 @@ void hashmap_free(void* map) {
 	free(head);
 }
 
+/*
+ * BinaryHeap
+ */
+typedef struct {
+	size_t len;
+	size_t cap;
+	size_t size;
+
+	char is_ptr;
+
+	int (*cmp_fn)(const void*, const void*);
+	void (*defer_fn)(void*);
+	void (*print_fn)(const void*);
+} __BinaryHeapHeader;
+
+#define BINHEAP_BASE_SIZE 16
+#define BINHEAP_HEADER_SIZE (sizeof(__BinaryHeapHeader))
+#define BINHEAP_GET_HEADER(heap) ((__BinaryHeapHeader*)(heap) - 1)
+
+#define binheap_length(heap) (BINHEAP_GET_HEADER(heap)->len)
+
+struct __BinaryHeapParams {
+	size_t __size;
+
+	char is_ptr;
+
+	int (*__cmp_fn)(const void*, const void*);
+	void (*defer_fn)(void*);
+	void (*print_fn)(const void*);
+};
+void* __binheap_new(struct __BinaryHeapParams params) {
+	__BinaryHeapHeader* head = malloc(BINHEAP_HEADER_SIZE + params.__size * BINHEAP_BASE_SIZE);
+	assert(head);
+	void* heap = head + 1;
+
+	head->len = 0;
+	head->cap = BINHEAP_BASE_SIZE;
+	head->size = params.__size;
+	head->is_ptr = params.is_ptr;
+
+	head->cmp_fn = params.__cmp_fn;
+	head->defer_fn = params.defer_fn;
+	head->print_fn = params.print_fn;
+
+	return heap;
+}
+#define __binheap_new_params(...) __binheap_new((struct __BinaryHeapParams){ 0, __VA_ARGS__ })
+#define binheap_new(T, cmp, ...) (T*)__binheap_new_params(.__size = sizeof(T), .__cmp_fn = cmp, __VA_ARGS__)
+void binheap_insert();
+void binheap_extract();
+void binheap_search();
+void binheap_delete();
+void binheap_free();
+void binheap_print();
+
+/*
+ * RingBuffer
+ */
+
 // additional functions for examples
 int int_compare(const void* a, const void* b) {
 	int aa = *(int*)a;
@@ -1294,14 +1353,23 @@ int main() {
 		printf("\nB =\t");
 		hashset_print(set2);
 		printf("\nA u B =\t");
-		hashset_print(hashset_union(set1, set2));
+		int* set_res = hashset_union(set1, set2);
+		hashset_print(set_res);
+		hashset_free(set_res);
 		printf("\nA n B =\t");
-		hashset_print(hashset_intersec(set1, set2));
+		set_res = hashset_intersec(set1, set2);
+		hashset_print(set_res);
+		hashset_free(set_res);
 		printf("\nA - B =\t");
-		hashset_print(hashset_diff(set1, set2));
+		set_res = hashset_diff(set1, set2);
+		hashset_print(set_res);
+		hashset_free(set_res);
 		printf("\nB - A =\t");
-		hashset_print(hashset_diff(set2, set1));
+		set_res = hashset_diff(set2, set1);
+		hashset_print(set_res);
+		hashset_free(set_res);
 		putchar('\n');
+		
 
 		hashset_free(set1);
 		hashset_free(set2);
@@ -1318,7 +1386,7 @@ int main() {
 		hashset_free(str_set);
 	}
 	
-	// hashmap examples
+	// hashmap example
 	printf("\nHashMap examples:\n"); {
 		KV* str_to_int = hashmap_new(KV, hash_str, str_eq, .is_key_ptr = 1, .defer_key_fn = str_free, .print_key_fn = str_print, .print_value_fn = int_print);
 
@@ -1380,5 +1448,11 @@ int main() {
 		putchar('\n');
 		hashmap_free(str_to_arr);
 	}
+
+	// binary heap example
+	printf("\nBinaryHeap examples:\n"); {
+		int* heap = binheap_new(int, int_compare, .print_fn = int_print);
+	}
+
 	return 0;
 }
