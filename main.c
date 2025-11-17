@@ -39,6 +39,13 @@ typedef struct {
 	void (*print_fn)(const void*);
 } __ArrayHeader;
 
+#define __DATA_GET_AT(header, data_ptr, pos) ((char*)(data_ptr) + (pos) * (header)->size)
+#define __PTR_CMP(header, l, r) (!(header)->is_ptr ? (header)->cmp_fn(l, r) : (header)->cmp_fn(*(void**)(l), *(void**)(r)))
+#define __PTR_CMP_POS(header, data_ptr, l_pos, r_pos) (!(header)->is_ptr ? \
+	(header)->cmp_fn(__DATA_GET_AT(header, data_ptr, l_pos), __DATA_GET_AT(header, data_ptr, r_pos)) : \
+	(header)->cmp_fn(*(void**)(__DATA_GET_AT(header, data_ptr, l_pos)), *(void**)(__DATA_GET_AT(header, data_ptr, r_pos))) \
+)
+
 #define ARRAY_HEADER_SIZE (sizeof(__ArrayHeader))
 #define ARRAY_BASE_SIZE 16
 #define ARRAY_GET_HEADER(arr) ((__ArrayHeader*)(arr) - 1)
@@ -1198,12 +1205,125 @@ void* __binheap_new(struct __BinaryHeapParams params) {
 }
 #define __binheap_new_params(...) __binheap_new((struct __BinaryHeapParams){ 0, __VA_ARGS__ })
 #define binheap_new(T, cmp, ...) (T*)__binheap_new_params(.__size = sizeof(T), .__cmp_fn = cmp, __VA_ARGS__)
-void binheap_insert();
-void binheap_extract();
+void __binheap_expand(void** heap_ptr, size_t n) {
+	void* heap = *heap_ptr;
+	__BinaryHeapHeader* head = BINHEAP_GET_HEADER(heap);
+	size_t new_cap = head->cap;
+	while (new_cap < head->len + n) { new_cap <<= 1; }
+
+	__BinaryHeapHeader* new_head = malloc(BINHEAP_HEADER_SIZE + new_cap * head->size);
+	new_head->len = head->len;
+	new_head->cap = new_cap;
+	new_head->size = head->size;
+	new_head->is_ptr = head->is_ptr;
+
+	new_head->cmp_fn = head->cmp_fn;
+	new_head->defer_fn = head->defer_fn;
+	new_head->print_fn = head->print_fn;
+
+	void* new_heap = new_head + 1;
+	memcpy(new_heap, heap, head->cap * head->size);
+	free(head);
+	*heap_ptr = new_heap;
+}
+#define get_left_child(n) (((n) << 1) + 1)
+#define get_right_child(n) (((n) << 1) + 2)
+#define get_parent(n) (((n) - 1) >> 1)
+void __binheap_insert(void** heap_ptr, void* val) {
+	void* heap = *heap_ptr;
+	__BinaryHeapHeader* head = BINHEAP_GET_HEADER(heap);
+	if (head->cap < head->len + 1) {
+		__binheap_expand(heap_ptr, 1);
+		heap = *heap_ptr;
+		head = BINHEAP_GET_HEADER(heap);
+	}
+
+	size_t pos = head->len++;
+	size_t parent_pos = get_parent(pos);;
+	while (pos) {
+		if (__PTR_CMP(head, val, (char*)heap + parent_pos * head->size) != -1) { break; }
+		memcpy(__DATA_GET_AT(head, heap, pos), __DATA_GET_AT(head, heap, parent_pos), head->size);
+		pos = parent_pos;
+		parent_pos = get_parent(pos);
+	}
+	memcpy(__DATA_GET_AT(head, heap, pos), val, head->size);
+}
+#define binheap_insert(heap, val) do { \
+	typeof(*heap) v = val; \
+	__binheap_insert((void**)&(heap), &v); \
+} while(0)
+void binheap_isnert_mult_n();
+void* __binheap_extract(void* heap) {
+	assert(heap);
+	__BinaryHeapHeader* head = BINHEAP_GET_HEADER(heap);
+	if (!head->len) { return NULL; }
+
+	--head->len;
+	__swap(heap, __DATA_GET_AT(head, heap, head->len), head->size);
+	size_t curr = 0;
+	while (curr < head->len) {
+		size_t left = get_left_child(curr);
+		if (left >= head->len) { break; }
+		size_t right = get_right_child(curr);
+		if (right < head->len) {
+			if (__PTR_CMP_POS(head, heap, left, right) == -1) {
+				if (__PTR_CMP_POS(head, heap, curr, left) == 1) {
+					__swap(__DATA_GET_AT(head, heap, curr), __DATA_GET_AT(head, heap, left), head->size);
+					curr = left;
+				} else { break; }
+			} else {
+				if (__PTR_CMP_POS(head, heap, curr, right) == 1) {
+					__swap(__DATA_GET_AT(head, heap, curr), __DATA_GET_AT(head, heap, right), head->size);
+					curr = right;
+				} else { break; }
+			} 
+		} else {
+			if (__PTR_CMP_POS(head, heap, curr, left) == 1) {
+				__swap(__DATA_GET_AT(head, heap, curr), __DATA_GET_AT(head, heap, left), head->size);
+				curr = left;
+			} else { break; }
+		}
+	}
+
+	return __DATA_GET_AT(head, heap, head->len);
+}
+#define binheap_extract(heap) (typeof(*heap)*)__binheap_extract(heap)
 void binheap_search();
 void binheap_delete();
-void binheap_free();
-void binheap_print();
+void binheap_free(void* heap) {
+	assert(heap);
+	__BinaryHeapHeader* head = BINHEAP_GET_HEADER(heap);
+
+	// TODO: add defer
+
+	free(head);
+}
+void binheap_print(const void* heap) {
+	assert(heap);
+	__BinaryHeapHeader* head = BINHEAP_GET_HEADER(heap);
+	assert(head->print_fn);
+
+	if (!head->len) { 
+		printf("{ }");
+		return;
+	}
+	size_t layer_count = 0;
+	for (size_t pos = head->len; pos << 1; pos >>= 1) { ++layer_count; }
+
+	size_t curr_pos = 0;
+	printf("{ ");
+	for (size_t i = 0; i < layer_count; ++i) {
+		if (i) { printf(", { "); } else { printf("{ "); }
+		for (size_t j = 0; j < (0b1ull << i); ++j) {
+			if (curr_pos >= head->len) { break; }
+			if (j) { printf(", "); }
+			head->print_fn(!head->is_ptr ? (char*)heap + curr_pos * head->size : *(void**)((char*)heap + curr_pos * head->size));
+			curr_pos++;
+		}
+		printf(" }");
+	}
+	printf(" }");
+}
 
 /*
  * RingBuffer
@@ -1215,6 +1335,7 @@ int int_compare(const void* a, const void* b) {
 	int bb = *(int*)b;
 	return aa < bb ? -1 : (aa > bb ? 1 : 0);
 }
+int int_compare_op(const void* a, const void* b) { return int_compare(a, b) * -1; }
 void int_print(const void* n) { printf("%d", *(int*)n); }
 void int_pow(void* dst, const void* src) { *(int*)dst = *(int*)src * *(int*)src; }
 int int_filter(const void* n) { return *(int*)n % 2; }
@@ -1451,7 +1572,28 @@ int main() {
 
 	// binary heap example
 	printf("\nBinaryHeap examples:\n"); {
-		int* heap = binheap_new(int, int_compare, .print_fn = int_print);
+		int* int_heap = binheap_new(int, int_compare, .print_fn = int_print);
+		printf("Added: [ ");
+		for (size_t i = 0; i < 20; ++i) {
+			int r = rand() % 50 - 25;
+			if (i) printf(", ");
+			printf("%d", r);
+			binheap_insert(int_heap, r);
+		}
+		printf(" ]\n");
+		binheap_print(int_heap);
+		putchar('\n');
+
+		int* extracted = NULL;
+		printf("Extracted: [ ");
+		char started = 0;
+		while ((extracted = binheap_extract(int_heap))) {
+			if (started) { printf(", "); } else { started = 1; }
+			printf("%d", *extracted);
+		}
+		printf(" ]\n");
+
+		binheap_free(int_heap);
 	}
 
 	return 0;

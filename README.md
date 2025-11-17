@@ -96,9 +96,14 @@ Everything that is dynamically allocated in this examples is freed correctly! Th
  - the `hash` and `equality` functions that need to be provided to `hashmap_new` are meant to be used for the *key* of the *hashmap*
  - the `cmp` function that needs to be provided to some of the data structures expects < to return -1, > to return 1 and == to return 0
  - if you want to swap a *minheap* for a *maxheap* you need to change `cmp` function to return the opposite values, same for sorting an *array* to sort descendingly
+ - functions that can except a dynamic data structure and don't store it can have a flag `.defer` set to *1*, and will do the same cleanup as it would be done by the `.defer_fn`
 
 ## TODOs
  - [ ] actually seperate code to be usable as a single header only library
+ - [ ] add hashset add mult and hashset self options
+ - [ ] add new from for all data structures
+ - [ ] add copy for all data structures
+ - [ ] add iterators (maybe)
  - [ ] better error reporting and error handling
  - [ ] ring buffer implementation
  - [ ] binary heap implementation
