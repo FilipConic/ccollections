@@ -158,6 +158,24 @@ void array_free(void* arr) {
 	}
 	free(head);
 }
+void __array_append_mult_n(void** arr_ptr, size_t n, const void* mult) {
+	void* arr = *arr_ptr;
+	__ArrayHeader* head = ARRAY_GET_HEADER(arr);
+	if (head->len + n >= head->cap) {
+		__array_expand(arr_ptr, n);
+		arr = *arr_ptr;
+		head = ARRAY_GET_HEADER(arr);
+	}
+
+	for (size_t i = 0; i < n; ++i) {
+		memcpy((char*)arr + head->size * head->len++, (char*)mult + head->size * i, head->size);
+	}
+}
+#define array_append_mult_n(arr, n, mult) __array_append_mult_n((void**)&(arr), n, mult)
+#define array_append_mult(arr, ...) do { \
+	typeof(*arr) mult[] = { __VA_ARGS__ }; \
+	__array_append_mult_n((void**)&(arr), sizeof(mult)/sizeof(*(mult)), mult); \
+} while(0)
 
 #define array_foreach(val, arr) for ( struct { typeof(*arr)* value; size_t idx; } val = { .value = arr, .idx = 0 }; val.idx < array_length(arr); ++val.idx, ++val.value )
 void array_set_cmp(void* arr, int (*cmp)(const void*, const void*)) { 
@@ -1115,7 +1133,7 @@ void hashmap_free(void* map) {
 		if (!head->is_value_ptr) {
 			for (size_t i = 0; i < head->cap; ++i) {
 				if (bitmap_get(bitmap, 2 * i) && !bitmap_get(bitmap, 2 * i + 1)) {
-					head->defer_key_fn((char*)map + i * head->size + head->size_key);
+					head->defer_value_fn((char*)map + i * head->size + head->size_key);
 				}
 			}
 		} else {
@@ -1123,7 +1141,7 @@ void hashmap_free(void* map) {
 				if (bitmap_get(bitmap, 2 * i) && !bitmap_get(bitmap, 2 * i + 1)) {
 					void* val = *(void**)((char*)map + i * head->size + head->size_key);
 					if (val) {
-						head->defer_key_fn(val);
+						head->defer_value_fn(val);
 					}
 				}
 			}
@@ -1153,6 +1171,7 @@ void set_has_string(char** set, const char* str) {
 }
 
 typedef struct { char* key; int value; } KV;
+typedef struct { char* key; int* value; } KV2;
 
 // examples
 int main() {
@@ -1188,6 +1207,13 @@ int main() {
 		array_print(arr2d);
 		putchar('\n');
 		array_free(arr2d);
+
+		// mult append
+		int* mult_arr = array_new(int, .print_fn = int_print);
+		array_append_mult(mult_arr, 1, 2, 3, 4, 5);
+		array_print(mult_arr);
+		putchar('\n');
+		array_free(mult_arr);
 	}
 
 	// string example
@@ -1197,11 +1223,8 @@ int main() {
 		str_free(str);
 
 		char** str_arr = array_new(char*, .is_ptr = 1, .defer_fn = str_free, .cmp_fn = str_cmp, .print_fn = str_print);
-		char* strs[5] = { "hello", "world", "how", "are", "you" };
-		for (size_t i = 0; i < 5; ++i) {
-			char* new_str = str_from_lit(strs[i]);
-			array_append(str_arr, new_str);
-		}
+		char* strs[5] = { str_from_lit("hello"), str_from_lit("world"), str_from_lit("how"), str_from_lit("are"), str_from_lit("you") };
+		array_append_mult_n(str_arr, 5, strs);
 		array_print(str_arr);
 		putchar('\n');
 
@@ -1322,18 +1345,40 @@ int main() {
 		hashmap_print(str_to_int);
 		putchar('\n');
 
+		printf("Removed: [ ");
 		for (size_t i = 0; i < 10; ++i) {
+			if (i) { printf(", "); }
 			int r = rand() % 10;
 			char* str = str_from_lit(strs[r]);
-			printf("Removed: [\""STR_FMT"\"]\n",  STR_UNPACK(str));
+			printf("\""STR_FMT "\"",  STR_UNPACK(str));
 			hashmap_remove(str_to_int, str, .defer = 1);
 		}
+		printf(" ]\n");
 
 		printf("%zu: ", hashmap_size(str_to_int));
 		hashmap_print(str_to_int);
 		putchar('\n');
 
 		hashmap_free(str_to_int);
+
+		KV2* str_to_arr = hashmap_new(KV2, hash_str, str_eq,
+			.defer_key_fn = str_free, .defer_value_fn = array_free,
+			.is_key_ptr = 1, .is_value_ptr = 1,
+			.print_key_fn = str_print, .print_value_fn = array_print
+		);
+
+		char* new_words[5] = { "a", "b", "c", "d", "e" };
+		for (size_t i = 0; i < 5; ++i) {
+			int* hashmap_arr = array_new(int, .print_fn = int_print);
+			size_t r = rand() % 10;
+			for (size_t j = 0; j < r; ++j) {
+				array_append(hashmap_arr, rand() % 20);
+			}
+			hashmap_add_v(str_to_arr, str_from_lit(new_words[i]), hashmap_arr);
+		}
+		hashmap_print(str_to_arr);
+		putchar('\n');
+		hashmap_free(str_to_arr);
 	}
 	return 0;
 }
