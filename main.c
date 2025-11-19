@@ -1,4 +1,5 @@
 #define CYLIBX_STRIP_PREFIX
+#define CYLIBX_IMPLEMENTATION
 #include "cylibx.h"
 
 // additional functions for examples
@@ -12,6 +13,7 @@ void int_print(const void* n) { printf("%d", *(int*)n); }
 void int_pow(void* dst, const void* src) { *(int*)dst = *(int*)src * *(int*)src; }
 int int_filter(const void* n) { return *(int*)n % 2; }
 int int_eq(const void* const a, const void* const b) { return *(int*)a == *(int*)b; }
+void int_sum(void* acc, const void* b) { *(int*)acc += *(int*)b; }
 
 void set_has_string(char** set, const char* str) {
 	if (hashset_contains(set, str_from_lit(str), .defer = 1)) {
@@ -43,6 +45,8 @@ int main() {
 		array_sort(array);
 		array_print(array);
 		putchar('\n');
+		
+		printf("Sum of all elements is: %d\n", *array_fold(array, 0, int_sum));
 
 		array_free(array);
 		array_free(new_arr);
@@ -117,13 +121,13 @@ int main() {
 		for (size_t i = 0; i < 75; ++i) {
 			hashset_add(int_set, rand() % 50);
 		}
-		printf("%zu: ", hashset_size(int_set));
+		printf("%zu: ", hashset_length(int_set));
 		hashset_print(int_set);
 		putchar('\n');
 		for (size_t i = 0; i < 50; i += 5) {
 			hashset_remove(int_set, i);
 		}
-		printf("%zu: ", hashset_size(int_set));
+		printf("%zu: ", hashset_length(int_set));
 		hashset_print(int_set);
 		putchar('\n');
 		hashset_free(int_set);
@@ -296,6 +300,8 @@ int main() {
 
 		ring_free(int_ring);
 	}
+
+	clear_buffers();
 
 	return 0;
 }

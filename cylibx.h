@@ -15,6 +15,7 @@
  */
 
 #if __CYX_CLOSE_FOLD
+
 #define __CYX_TEMP_BUFFER_SIZE 8192
 static struct {
 	char buffer[__CYX_TEMP_BUFFER_SIZE];
@@ -42,6 +43,11 @@ static struct {
 
 void __cyx_temp_reset_deleted();
 void* __cyx_temp_alloc_deleted(size_t bytes, void* val, char is_ptr, void(*fn)(void*));
+#define cyx_clear_buffers() do { __cyx_temp_reset_deleted(); } while(0)
+
+#ifdef CYLIBX_STRIP_PREFIX
+#define clear_buffers() cyx_clear_buffers()
+#endif // CYLIBX_STRIP_PREFIX
 
 #ifdef CYLIBX_IMPLEMENTATION
 
@@ -57,7 +63,9 @@ void __cyx_temp_reset_deleted() {
 
 	for (size_t i = 0; i < __cyx_temp_deleted.fn_count; ++i) {
 		struct __DeletedFN* curr = &__cyx_temp_deleted.fns[i];
-		curr->defer_fn(!curr->is_ptr ? curr->byte_pos : *(void**)(curr->byte_pos));
+		if (curr->defer_fn) {
+			curr->defer_fn(!curr->is_ptr ? curr->byte_pos : *(void**)(curr->byte_pos));
+		}
 	}
 
 	__cyx_temp_deleted.fn_count = 0;
@@ -241,7 +249,7 @@ void* __cyx_array_copy(void* arr);
 void __cyx_array_expand(void** arr_ptr, size_t n);
 void __cyx_array_append(void** arr, void* val);
 void* __cyx_array_remove(void* arr, int pos);
-void* __array_at(void* arr, int pos);
+void* __cyx_array_at(void* arr, int pos);
 void cyx_array_free(void* arr);
 void __cyx_array_append_mult_n(void** arr_ptr, size_t n, const void* mult);
 void cyx_array_print(const void* arr);
@@ -253,6 +261,7 @@ void* __cyx_array_filter(const void* const arr, int (*fn)(const void*));
 void* cyx_array_filter_self(void* arr, int (*fn)(const void*));
 int cyx_array_find(void* arr, void* val);
 int cyx_array_find_by(void* arr, int (*fn)(const void*));
+void* __cyx_array_fold(void* arr, void* accumulator, void (*fn)(void*, const void*));
 
 #define cyx_array_length(arr) (__CYX_ARRAY_GET_HEADER(arr)->len)
 #define cyx_array_foreach(val, arr) for ( struct { typeof(*arr)* value; size_t idx; } val = { .value = arr, .idx = 0 }; val.idx < array_length(arr); ++val.idx, val.value = (typeof(*arr)*)((char*)val.value + __CYX_ARRAY_GET_HEADER(arr)->size) )
@@ -281,6 +290,10 @@ int cyx_array_find_by(void* arr, int (*fn)(const void*));
 } while(0)
 #define cyx_array_map(arr, fn) (typeof(*arr)*)__cyx_array_map(arr, fn)
 #define cyx_array_filter(arr, fn) (typeof(*arr)*)__cyx_array_filter(arr, fn)
+#define cyx_array_fold(arr, accumulator, fn) ({ \
+	typeof(*arr) acc = (accumulator); \
+	(typeof(*arr)*)__cyx_array_fold(arr, &acc, fn); \
+})
 
 #ifdef CYLIBX_STRIP_PREFIX
 
@@ -300,6 +313,7 @@ int cyx_array_find_by(void* arr, int (*fn)(const void*));
 #define array_sort(arr) cyx_array_sort(arr)
 #define array_map(arr, fn) cyx_array_map(arr, fn)
 #define array_filter(arr, fn) cyx_array_filter(arr, fn)
+#define array_fold(arr, accumulator, fn) cyx_array_fold(arr, accumulator, fn)
 
 #define array_free cyx_array_free
 #define array_print cyx_array_print
@@ -380,7 +394,7 @@ void* __cyx_array_remove(void* arr, int pos) {
 	}
 	return ret;
 }
-void* __array_at(void* arr, int pos) {
+void* __cyx_array_at(void* arr, int pos) {
 	if (!arr) { return NULL; }
 
 	__CyxArrayHeader* head = __CYX_ARRAY_GET_HEADER(arr);
@@ -391,7 +405,6 @@ void* __array_at(void* arr, int pos) {
 }
 void cyx_array_free(void* arr) {
 	assert(arr);
-	__cyx_temp_reset_deleted();
 
 	__CyxArrayHeader* head = __CYX_ARRAY_GET_HEADER(arr);
 	if (head->defer_fn) {
@@ -436,6 +449,7 @@ void cyx_array_print(const void* arr) {
 	}
 	printf(" }");
 }
+
 void __cyx_array_sort(void* arr, int start, int end) {
 	__CyxArrayHeader* head = __CYX_ARRAY_GET_HEADER(arr);
 	if (end - start <= 1 || end < start) {
@@ -558,6 +572,16 @@ int cyx_array_find_by(void* arr, int (*fn)(const void*)) {
 		}
 	}
 	return -1;
+}
+void* __cyx_array_fold(void* arr, void* accumulator, void (*fn)(void*, const void*)) {
+	__CyxArrayHeader* head = __CYX_ARRAY_GET_HEADER(arr);
+
+	void* ret = __cyx_temp_alloc_deleted(head->size, accumulator, head->is_ptr, head->defer_fn);
+	if (head->defer_fn) { head->defer_fn(!head->is_ptr ? accumulator : *(void**)accumulator); }
+
+	for (size_t i = 0; i < head->len; ++i) { fn(ret, __CYX_DATA_GET_AT(head, arr, i)); }
+
+	return ret;
 }
 
 #endif // CYLIBX_IMPLEMENTATION
@@ -763,6 +787,7 @@ size_t cyx_hash_str(const void* const val) {
 }
 
 #endif // CYLIBX_IMPLEMENTATION
+
 #endif // __CYX_CLOSE_FOLD
 
 /*
@@ -855,14 +880,14 @@ void* __cyx_hashset_diff_self(void* self, const void* const other);
 	__cyx_hashset_contains_params(.__set = set, .__val = &v, __VA_ARGS__); \
 })
 
-#define cyx_hashset_union(set1, set2) (typeof(*set1)*)__hashset_union(set1, set2)
+#define cyx_hashset_union(set1, set2) (typeof(*set1)*)__cyx_hashset_union(set1, set2)
 #define cyx_hashset_union_self(self, other) (typeof(*self)*)__cyx_hashset_union_self(self, other)
 #define cyx_hashset_intersec(set1, set2) (typeof(*set1)*)__cyx_hashset_intersec(set1, set2)
 #define cyx_hashset_intersec_self(self, other) (typeof(*self)*)__cyx_hashset_intersec_self(self, other)
 #define cyx_hashset_diff(set1, set2) (typeof(*set1)*)__cyx_hashset_diff(set1, set2)
 #define cyx_hashset_diff_self(self, other) (typeof(*self)*)__cyx_hashset_diff_self(self, other)
 
-#ifdef CYLIBX_STRIP_RREFIX
+#ifdef CYLIBX_STRIP_PREFIX
 
 #define hashset_length(set) cyx_hashset_length(set)
 #define hashset_foreach(val, set) cyx_hashset_foreach(val, set)
@@ -885,8 +910,7 @@ void* __cyx_hashset_diff_self(void* self, const void* const other);
 #define hashset_free cyx_hashset_free
 #define hashset_print cyx_hashset_print
 
-#endif // CYLIBX_STRIP_RREFIX
-
+#endif // CYLIBX_STRIP_PREFIX
 
 #ifdef CYLIBX_IMPLEMENTATION
 
@@ -1239,7 +1263,7 @@ void __cyx_hashmap_expand(void** map_ptr);
 void __cyx_hashmap_add(void** map_ptr, void* key);
 void __cyx_hashmap_add_v(void** map_ptr, void* key, void* val);
 void* __cyx_hashmap_get(struct __CyxHashMapFuncParams params);
-void __cyx_hashmap_remove(struct __CyxHashMapFuncParams params);
+void* __cyx_hashmap_remove(struct __CyxHashMapFuncParams params);
 void cyx_hashmap_free(void* map);
 void cyx_hashmap_print(const void* map);
 
@@ -1263,18 +1287,18 @@ void cyx_hashmap_print(const void* map);
 	typeof(map->value) val = v; \
 	__cyx_hashmap_add_v((void**)&(map), &key, &val); \
 } while(0)
-#define __cyx_hashmap_get_params(...) __cyx_hashmap_get((struct __HashMapFuncParams){ 0, __VA_ARGS__ })
+#define __cyx_hashmap_get_params(...) __cyx_hashmap_get((struct __CyxHashMapFuncParams){ 0, __VA_ARGS__ })
 #define cyx_hashmap_get(map, k, ...) ({ \
-	typeof(map->key) key = k; \
-	(typeof(map->value)*) __cyx_hashmap_get_params( .__map = map, .__key = &key, __VA_ARGS__ ); \
+	typeof((map)->key) key = k; \
+	(typeof((map)->value)*) __cyx_hashmap_get_params( .__map = map, .__key = &key, __VA_ARGS__ ); \
 })
-#define __cyx_hashmap_remove_params(...) __cyx_hashmap_remove((struct __HashMapFuncParams){ 0, __VA_ARGS__ })
-#define cyx_hashmap_remove(map, k, ...) do { \
-	typeof(map->key) key = k; \
-	__cyx_hashmap_remove_params( .__map = map, .__key = &key, __VA_ARGS__ ); \
-} while(0)
+#define __cyx_hashmap_remove_params(...) __cyx_hashmap_remove((struct __CyxHashMapFuncParams){ 0, __VA_ARGS__ })
+#define cyx_hashmap_remove(map, k, ...) ({ \
+	typeof((map)->key) key = k; \
+	(typeof((map)->value)*)__cyx_hashmap_remove_params( .__map = map, .__key = &key, __VA_ARGS__ ); \
+})
 
-// #ifdef CYLIBX_STRIP_PREFIX
+#ifdef CYLIBX_STRIP_PREFIX
 
 #define hashmap_size(map) cyx_hashmap_size(map)
 #define hashmap_foreach(val, map) cyx_hashmap_foreach(val, map)
@@ -1283,12 +1307,12 @@ void cyx_hashmap_print(const void* map);
 #define hashmap_add(map, k) cyx_hashmap_add(map, k)
 #define hashmap_add_v(map, k, v) cyx_hashmap_add_v(map, k, v)
 #define hashmap_get(map, k, ...) cyx_hashmap_get(map, k, __VA_ARGS__)
-#define hashmap_remove(map, k, ...) cyx_hashmap_remove(map, k, ...)
+#define hashmap_remove(map, k, ...) cyx_hashmap_remove(map, k, __VA_ARGS__)
 
 #define hashmap_free cyx_hashmap_free
 #define hashmap_print cyx_hashmap_print
 
-// #endif // CYLIBX_STRIP_PREFIX
+#endif // CYLIBX_STRIP_PREFIX
 
 
 #ifdef CYLIBX_IMPLEMENTATION
@@ -1453,7 +1477,7 @@ void* __cyx_hashmap_get(struct __CyxHashMapFuncParams params) {
 	}
 	return res;
 }
-void __cyx_hashmap_remove(struct __CyxHashMapFuncParams params) {
+void* __cyx_hashmap_remove(struct __CyxHashMapFuncParams params) {
 	assert(params.__map);
 	__CyxHashMapHeader* head = __CYX_HASHMAP_GET_HEADER(params.__map);
 	assert(head->hash_fn && head->eq_fn);
@@ -1478,6 +1502,7 @@ void __cyx_hashmap_remove(struct __CyxHashMapFuncParams params) {
 	if (params.defer && head->defer_key_fn) {
 		head->defer_key_fn(!head->is_key_ptr ? params.__key : *(void**)params.__key);
 	}
+	void* removed = NULL;
 	if (res >= 0) {
 		--head->len;
 		cyx_bitmap_set(bitmap, 2 * res + 1, 1);
@@ -1485,15 +1510,14 @@ void __cyx_hashmap_remove(struct __CyxHashMapFuncParams params) {
 		if (head->defer_key_fn) {
 			head->defer_key_fn(!head->is_key_ptr ? key : *(void**)key);
 		}
-		key = (char*)key + head->size_key;
+		void* value = (char*)key + head->size_key;
 		if (head->defer_value_fn) {
-			if (!head->is_value_ptr) {
-				head->defer_value_fn(key);
-			} else if (*(void**)key) {
-				head->defer_value_fn(*(void**)key);
-			}
+			removed = __cyx_temp_alloc_deleted(head->size_value, value, head->is_value_ptr, head->defer_value_fn);
+		} else {
+			removed = value;
 		}
 	}
+	return removed;
 }
 void cyx_hashmap_free(void* map) {
 	assert(map);
@@ -1916,7 +1940,7 @@ void cyx_ring_print(const void* ring);
 		val = (char*)val + __CYX_UNIQUE_VAL__(head)->size, \
 		__CYX_UNIQUE_VAL__(started) = 0)
 #define cyx_ring_drain(val, ring) for(typeof(*ring)* val = NULL; (val = cyx_ring_pop(ring));)
-#define __cyx_ring_new_params(...) __cyx_ring_new((struct __RingBufParams){ __VA_ARGS__ })
+#define __cyx_ring_new_params(...) __cyx_ring_new((struct __CyxRingBufParams){ __VA_ARGS__ })
 #define cyx_ring_new(T, ...) (T*)__cyx_ring_new_params(.__size = sizeof(T), __VA_ARGS__)
 #define cyx_ring_push(ring, val) do { \
 	typeof(*ring) v = (val); \
@@ -1930,7 +1954,7 @@ void cyx_ring_print(const void* ring);
 #define cyx_ring_pop(ring) (typeof(*ring)*)__cyx_ring_pop(ring)
 
 
-#ifdef CYLIBX_STRIP_PREFFIX
+#ifdef CYLIBX_STRIP_PREFIX
 
 #define ring_length(ring) cyx_ring_length(ring)
 #define ring_foreach(val, ring) cyx_ring_foreach(val, ring)
@@ -2023,7 +2047,12 @@ void* __cyx_ring_pop(void* ring) {
 
 	__CyxRingBufHeader* head = __CYX_RINGBUF_GET_HEADER(ring);
 	if (!head->len) { return NULL; }
-	void* ret = __cyx_temp_alloc_deleted(head->size, __CYX_DATA_GET_AT(head, ring, head->start), head->is_ptr, head->defer_fn);
+	void* ret = NULL;
+	if (head->defer_fn) {
+		ret = __cyx_temp_alloc_deleted(head->size, __CYX_DATA_GET_AT(head, ring, head->start), head->is_ptr, head->defer_fn);
+	} else {
+		ret = __CYX_DATA_GET_AT(head, ring, head->start);
+	}
 	++head->start;
 	--head->len;
 	if (head->start == head->cap) { head->start = 0; }
