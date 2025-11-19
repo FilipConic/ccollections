@@ -97,12 +97,16 @@ Everything that is dynamically allocated in this examples is freed correctly! Th
  - the `cmp` function that needs to be provided to some of the data structures expects < to return -1, > to return 1 and == to return 0
  - if you want to swap a *minheap* for a *maxheap* you need to change `cmp` function to return the opposite values, same for sorting an *array* to sort descendingly
  - functions that can except a dynamic data structure and don't store it can have a flag `.defer` set to *1*, and will do the same cleanup as it would be done by the `.defer_fn`
+ - at every delete/remove/extract/pop operation done by a dynamic structure there is a possibilty that a temporary buffer that was keeping your previous delete return value will get cleaned up, if you want to keep a return from a delete operation use a `copy` function, all free functions also do deleted values cleanup (if needed)
 
 ## TODOs
  - [ ] actually seperate code to be usable as a single header only library
+ - [ ] add temporary buffer managment and delete operatio returns
  - [ ] add hashset add mult and hashset self options
+ - [ ] turn print functions into the to_string functions
  - [ ] add new from for all data structures
  - [ ] add copy for all data structures
+ - [ ] put automatic deleted values cleanup under a flag
  - [ ] add iterators (maybe)
  - [ ] better error reporting and error handling
  - [ ] ring buffer implementation

@@ -25,6 +25,58 @@ void* temp_buffer_alloc(size_t n_bytes) {
 #define temp_buffer_marker_set() do { __temp.marker = __temp.curr; } while (0)
 #define temp_buffer_marker_reset() do { __temp.curr = __temp.marker; } while(0)
 
+#define DELETED_PTR_COUNT 16
+#define DELETED_PTR_SIZE (64 * 16)
+struct __DeletedFN {
+	void(*defer_fn)(void*);
+	void* byte_pos;
+	char is_ptr;
+};
+static struct {
+	struct __DeletedFN fns[DELETED_PTR_COUNT];
+	char buffer[DELETED_PTR_SIZE];
+	size_t fn_count;
+	size_t buffer_count;
+} __temp_deleted = { 0 };
+
+void __temp_reset_deleted() {
+	if (!__temp_deleted.buffer_count && !__temp_deleted.fn_count) { return; }
+
+	for (size_t i = 0; i < __temp_deleted.fn_count; ++i) {
+		struct __DeletedFN* curr = &__temp_deleted.fns[i];
+		curr->defer_fn(!curr->is_ptr ? curr->byte_pos : *(void**)(curr->byte_pos));
+	}
+
+	__temp_deleted.fn_count = 0;
+	__temp_deleted.buffer_count = 0;
+}
+void* __temp_alloc_deleted(size_t bytes, void* val, char is_ptr, void(*fn)(void*)) {
+	if (__temp_deleted.buffer_count + bytes > DELETED_PTR_SIZE || __temp_deleted.fn_count == DELETED_PTR_COUNT) { __temp_reset_deleted(); }
+	void* ret = (char*)__temp_deleted.buffer;
+
+	memcpy(ret, val, bytes);
+	__temp_deleted.buffer_count += bytes;
+	__temp_deleted.fns[__temp_deleted.fn_count++] = (struct __DeletedFN){ .defer_fn = fn, .byte_pos = ret, .is_ptr = is_ptr, };
+
+	return ret;
+}
+
+#define __DATA_GET_AT(header, data_ptr, pos) ((char*)(data_ptr) + (pos) * (header)->size)
+#define __PTR_CMP(header, l, r) (!(header)->is_ptr ? (header)->cmp_fn(l, r) : (header)->cmp_fn(*(void**)(l), *(void**)(r)))
+#define __PTR_CMP_POS(header, data_ptr, l_pos, r_pos) (!(header)->is_ptr ? \
+	(header)->cmp_fn(__DATA_GET_AT(header, data_ptr, l_pos), __DATA_GET_AT(header, data_ptr, r_pos)) : \
+	(header)->cmp_fn(*(void**)(__DATA_GET_AT(header, data_ptr, l_pos)), *(void**)(__DATA_GET_AT(header, data_ptr, r_pos))) \
+)
+#define __swap(a, b, size) do { \
+	temp_buffer_marker_set(); \
+		void* temp = temp_buffer_alloc(size); \
+		assert(temp && "ERROR: Can not allocate to the temporary buffer anymore!"); \
+		memcpy(temp, a, size); \
+		memcpy(a, b, size); \
+		memcpy(b, temp, size); \
+	temp_buffer_marker_reset(); \
+} while(0);
+
 /*
  * Array
  */
@@ -39,19 +91,14 @@ typedef struct {
 	void (*print_fn)(const void*);
 } __ArrayHeader;
 
-#define __DATA_GET_AT(header, data_ptr, pos) ((char*)(data_ptr) + (pos) * (header)->size)
-#define __PTR_CMP(header, l, r) (!(header)->is_ptr ? (header)->cmp_fn(l, r) : (header)->cmp_fn(*(void**)(l), *(void**)(r)))
-#define __PTR_CMP_POS(header, data_ptr, l_pos, r_pos) (!(header)->is_ptr ? \
-	(header)->cmp_fn(__DATA_GET_AT(header, data_ptr, l_pos), __DATA_GET_AT(header, data_ptr, r_pos)) : \
-	(header)->cmp_fn(*(void**)(__DATA_GET_AT(header, data_ptr, l_pos)), *(void**)(__DATA_GET_AT(header, data_ptr, r_pos))) \
-)
 
 #define ARRAY_HEADER_SIZE (sizeof(__ArrayHeader))
 #define ARRAY_BASE_SIZE 16
 #define ARRAY_GET_HEADER(arr) ((__ArrayHeader*)(arr) - 1)
 
 #define array_length(arr) (ARRAY_GET_HEADER(arr)->len)
-#define array_reset(arr) do { ARRAY_GET_HEADER(arr)->len = 0; } while(0)
+#define array_foreach(val, arr) for ( struct { typeof(*arr)* value; size_t idx; } val = { .value = arr, .idx = 0 }; val.idx < array_length(arr); ++val.idx, ++val.value )
+#define array_drain(val, arr) for (typeof(*arr)* val = NULL; (val = array_pop(arr));)
 
 struct __ArrayParams {
 	size_t __size;
@@ -83,7 +130,7 @@ void* __array_new(struct __ArrayParams params) {
 }
 #define __array_new_params(...) __array_new((struct __ArrayParams){ 0, __VA_ARGS__ })
 #define array_new(T, ...) (T*)__array_new_params(.__size = sizeof(T), __VA_ARGS__)
-void* array_copy(void* arr) {
+void* __array_copy(void* arr) {
 	__ArrayHeader* head = ARRAY_GET_HEADER(arr);
 
 	void* res = malloc(ARRAY_HEADER_SIZE + head->cap * head->size);
@@ -93,6 +140,7 @@ void* array_copy(void* arr) {
 
 	return (void*)(res_head + 1);
 }
+#define array_copy(arr) (typeof(*arr)*)__array_copy(arr)
 void __array_expand(void** arr_ptr, size_t n) {
 	assert(*arr_ptr);
 
@@ -118,26 +166,25 @@ void __array_append(void** arr, void* val) {
 	typeof(*arr) v = (val); \
 	__array_append((void**)&arr, &v); \
 } while(0)
-#define __swap(a, b, size) do { \
-	temp_buffer_marker_set(); \
-		void* temp = temp_buffer_alloc(size); \
-		assert(temp && "ERROR: Can not allocate to the temporary buffer anymore!"); \
-		memcpy(temp, a, size); \
-		memcpy(a, b, size); \
-		memcpy(b, temp, size); \
-	temp_buffer_marker_reset(); \
-} while(0);
 void* __array_remove(void* arr, int pos) {
 	assert(arr);
 	__ArrayHeader* head = ARRAY_GET_HEADER(arr);
 	if (pos < 0) { pos += head->len; }
 	assert(pos < (int)head->len);
 	--head->len;
-	__swap((void*)((char*)arr + pos * head->size), (void*)((char*)arr + head->len * head->size), head->size);
-	return (void*)((char*)arr + head->len * head->size);
+
+	void* ret;
+	if (head->defer_fn) {
+		memcpy(__DATA_GET_AT(head, arr, pos), __DATA_GET_AT(head, arr, head->len), head->size);
+		ret = __temp_alloc_deleted(head->size, __DATA_GET_AT(head, arr, head->len), head->is_ptr, head->defer_fn);
+	} else {
+		__swap(__DATA_GET_AT(head, arr, pos), __DATA_GET_AT(head, arr, head->len), head->size);
+		ret = __DATA_GET_AT(head, arr, head->len);
+	}
+	return ret;
 }
-#define array_remove(arr, pos) *(typeof(*arr)*)__array_remove((void*)arr, pos)
-#define array_pop(arr) *(typeof(*arr)*)__array_remove((void*)arr, -1)
+#define array_remove(arr, pos) (typeof(*arr)*)__array_remove(arr, pos)
+#define array_pop(arr) (typeof(*arr)*)__array_remove(arr, -1)
 void* __array_at(void* arr, int pos) {
 	if (!arr) { return NULL; }
 
@@ -150,6 +197,7 @@ void* __array_at(void* arr, int pos) {
 #define array_at(arr, pos) (typeof(*arr)*)__array_at(arr, pos)
 void array_free(void* arr) {
 	assert(arr);
+	__temp_reset_deleted();
 
 	__ArrayHeader* head = ARRAY_GET_HEADER(arr);
 	if (head->defer_fn) {
@@ -184,7 +232,6 @@ void __array_append_mult_n(void** arr_ptr, size_t n, const void* mult) {
 	__array_append_mult_n((void**)&(arr), sizeof(mult)/sizeof(*(mult)), mult); \
 } while(0)
 
-#define array_foreach(val, arr) for ( struct { typeof(*arr)* value; size_t idx; } val = { .value = arr, .idx = 0 }; val.idx < array_length(arr); ++val.idx, ++val.value )
 void array_set_cmp(void* arr, int (*cmp)(const void*, const void*)) { 
 	assert(arr);
 
@@ -845,7 +892,6 @@ typedef struct {
 #define HASHMAP_GET_BITMAP(map) ((size_t*)((char*)(map) + HASHMAP_GET_HEADER(map)->size * HASHMAP_GET_HEADER(map)->cap) + 1)
 
 #define hashmap_size(map) (HASHMAP_GET_HEADER(map)->len)
-
 #define hashmap_foreach(val, map) size_t __UNIQUE_VAL__(i) = 0; \
 	for (typeof(map->value)* val = (void*)((char*)map + HASHMAP_GET_HEADER(map)->size_key); \
 		__UNIQUE_VAL__(i) < HASHMAP_GET_HEADER(map)->cap; \
@@ -1177,6 +1223,7 @@ typedef struct {
 #define BINHEAP_GET_HEADER(heap) ((__BinaryHeapHeader*)(heap) - 1)
 
 #define binheap_length(heap) (BINHEAP_GET_HEADER(heap)->len)
+#define binheap_drain(val, heap) for (typeof(*heap)* val = NULL; (val = binheap_extract(heap));)
 
 struct __BinaryHeapParams {
 	size_t __size;
@@ -1270,14 +1317,8 @@ void __binheap_insert_mult_n(void** heap_ptr, size_t n, void* mult) {
 	typeof(*heap) mult[] = { __VA_ARGS__ }; \
 	__binheap_insert_mult_n((void**)&(heap), sizeof(mult)/sizeof(*mult), mult); \
 } while(0)
-void* __binheap_extract(void* heap) {
-	assert(heap);
+void __binheap_try_fit(void* heap, size_t curr) {
 	__BinaryHeapHeader* head = BINHEAP_GET_HEADER(heap);
-	if (!head->len) { return NULL; }
-
-	--head->len;
-	__swap(heap, __DATA_GET_AT(head, heap, head->len), head->size);
-	size_t curr = 0;
 	while (curr < head->len) {
 		size_t left = __get_left_child(curr);
 		if (left >= head->len) { break; }
@@ -1301,17 +1342,91 @@ void* __binheap_extract(void* heap) {
 			} else { break; }
 		}
 	}
+}
+void* __binheap_extract(void* heap) {
+	assert(heap);
+	__BinaryHeapHeader* head = BINHEAP_GET_HEADER(heap);
+	if (!head->len) { return NULL; }
+
+	--head->len;
+	__swap(heap, __DATA_GET_AT(head, heap, head->len), head->size);
+	__binheap_try_fit(heap, 0);
 
 	return __DATA_GET_AT(head, heap, head->len);
 }
 #define binheap_extract(heap) (typeof(*heap)*)__binheap_extract(heap)
-void binheap_search();
-void binheap_delete();
+struct __BinaryHeapSearchParams {
+	void* __heap;
+	void* __val;
+	char defer;
+};
+int __binheap_contains(struct __BinaryHeapSearchParams params) {
+	assert(params.__heap);
+	__BinaryHeapHeader* head = BINHEAP_GET_HEADER(params.__heap);
+
+	int res = 0;
+	for (size_t i = 0; i < head->len; ++i) {
+		if (__PTR_CMP(head, params.__val, __DATA_GET_AT(head, params.__heap, i)) == 0) {
+			res = 1;
+			break;
+		}
+	}
+	if (params.defer && head->defer_fn) {
+		head->defer_fn(!head->is_ptr ? params.__val : *(void**)params.__val);
+	}
+	return res;
+}
+#define __binheap_contains_params(...) __binary_contains((struct __BinaryHeapSearchParams){ 0, __VA_ARGS__ })
+#define binheap_contains(heap, val, ...) ({ \
+	typeof(*(heap)) v = (val); \
+	__binary_contains_params(.__heap = (heap), .__val = &v, __VA_ARGS__); \
+})
+int __binheap_remove(struct __BinaryHeapSearchParams params) {
+	assert(params.__heap);
+	__BinaryHeapHeader* head = BINHEAP_GET_HEADER(params.__heap);
+
+	int res = -1;
+	for (size_t i = 0; i < head->len; ++i) {
+		if (__PTR_CMP(head, params.__val, __DATA_GET_AT(head, params.__heap, i)) == 0) {
+			res = (int)i;
+			break;
+		}
+	}
+
+	if (head->defer_fn && params.defer) {
+		head->defer_fn(!head->is_ptr ? params.__val : *(void**)params.__val);
+	}
+	if (res != -1) {
+		if (head->defer_fn) {
+			head->defer_fn(!head->is_ptr ? __DATA_GET_AT(head, params.__heap, res) : *(void**)__DATA_GET_AT(head, params.__heap, res));
+		}
+		--head->len;
+		memcpy(__DATA_GET_AT(head, params.__heap, res), __DATA_GET_AT(head, params.__heap, head->len), head->size);
+		__binheap_try_fit(params.__heap, res);
+	}
+	return res != -1;
+}
+#define __binheap_remove_params(...) __binheap_remove((struct __BinaryHeapSearchParams){ 0, __VA_ARGS__ })
+#define binheap_remove(heap, val, ...) ({ \
+	typeof(*heap) v = (val); \
+	__binheap_remove_params(.__heap = (heap), .__val = &v, __VA_ARGS__); \
+})
 void binheap_free(void* heap) {
 	assert(heap);
 	__BinaryHeapHeader* head = BINHEAP_GET_HEADER(heap);
 
-	// TODO: add defer
+	if (head->defer_fn) {
+		if (!head->is_ptr) {
+			for (size_t i = 0; i < head->len; ++i) {
+				head->defer_fn(__DATA_GET_AT(head, heap, i));
+			} 
+		} else {
+			for (size_t i = 0; i < head->len; ++i) {
+				head->defer_fn(*(void**)__DATA_GET_AT(head, heap, i));
+			}
+		}
+	}
+
 
 	free(head);
 }
@@ -1345,6 +1460,164 @@ void binheap_print(const void* heap) {
 /*
  * RingBuffer
  */
+typedef struct {
+	size_t len;
+	size_t cap;
+	size_t size;
+
+	size_t start;
+	size_t end;
+
+	char is_ptr;
+
+	void (*defer_fn)(void*);
+	void (*print_fn)(const void*);
+} __RingBufHeader;
+
+#define RINGBUF_BASE_SIZE (ARRAY_BASE_SIZE)
+#define RINGBUF_HEADER_SIZE (sizeof(__RingBufHeader))
+#define RINGBUF_GET_HEADER(ring) ((__RingBufHeader*)(ring) - 1)
+
+#define ring_length(ring) (RINGBUF_GET_HEADER(ring)->len)
+#define ring_foreach(val, ring) __RingBufHeader* __UNIQUE_VAL__(head) = RINGBUF_GET_HEADER(ring); \
+	char __UNIQUE_VAL__(started) = __UNIQUE_VAL__(head)->len != 0; \
+	size_t __UNIQUE_VAL__(i) = __UNIQUE_VAL__(head)->start; \
+	for (typeof(*ring)* val = __DATA_GET_AT(__UNIQUE_VAL__(head), ring, __UNIQUE_VAL__(head)->start);\
+		__UNIQUE_VAL__(i) != __UNIQUE_VAL__(head)->end || __UNIQUE_VAL__(started); \
+		__UNIQUE_VAL__(i) = (__UNIQUE_VAL__(i) + 1) % __UNIQUE_VAL__(head)->cap, \
+		val = (char*)val + __UNIQUE_VAL__(head)->size, \
+		__UNIQUE_VAL__(started) = 0)
+#define ring_drain(val, ring) for(typeof(*ring)* val = NULL; (val = ring_pop(ring));)
+
+struct __RingBufParams {
+	size_t __size;
+
+	char is_ptr;
+	void (*defer_fn)(void*);
+	void (*print_fn)(const void*);
+};
+void* __ring_new(struct __RingBufParams params) {
+	__RingBufHeader* head = malloc(RINGBUF_HEADER_SIZE + params.__size * RINGBUF_BASE_SIZE);
+	memset(head, 0, RINGBUF_HEADER_SIZE + params.__size * RINGBUF_BASE_SIZE);
+	head->size = params.__size;
+	head->cap = RINGBUF_BASE_SIZE;
+	head->len = 0;
+
+	head->start = 0;
+	head->end = 0;
+
+	head->is_ptr = params.is_ptr;
+	head->defer_fn = params.defer_fn;
+	head->print_fn = params.print_fn;
+
+	return head + 1;
+}
+#define __ring_new_params(...) __ring_new((struct __RingBufParams){ __VA_ARGS__ })
+#define ring_new(T, ...) (T*)__ring_new_params(.__size = sizeof(T), __VA_ARGS__)
+void __ring_expand(void** ring_ptr, size_t n) {
+	__RingBufHeader* head = RINGBUF_GET_HEADER(*ring_ptr);
+
+	size_t new_cap = head->cap;
+	while ((new_cap <<= 1) <= head->len + n);
+
+	__RingBufHeader* new_head = malloc(RINGBUF_HEADER_SIZE + new_cap * head->size);
+	void* new_ring = new_head + 1;
+	memcpy(new_head, head, RINGBUF_HEADER_SIZE);
+	new_head->cap = new_cap;
+	new_head->start = 0;
+	new_head->end = 0;
+
+	ring_foreach(val, *ring_ptr) {
+		memcpy(__DATA_GET_AT(new_head, new_ring, new_head->len), val, head->size);
+		new_head->len++;
+		new_head->end++;
+	}
+
+	free(head);
+	*ring_ptr = new_ring;
+}
+void __ring_push(void** ring_ptr, void* val) {
+	assert(*ring_ptr);
+	__RingBufHeader* head = RINGBUF_GET_HEADER(*ring_ptr);
+	if (head->len == head->cap) {
+		__ring_expand(ring_ptr, 1);
+		head = RINGBUF_GET_HEADER(*ring_ptr);
+	}
+
+	if (head->len == 0) { head->end = 0; head->start = 0; }
+	memcpy(__DATA_GET_AT(head, *ring_ptr, head->end++), val, head->size);
+	if (head->end == head->cap) { head->end = 0; }
+
+	head->len++;
+}
+#define ring_push(ring, val) do { \
+	typeof(*ring) v = (val); \
+	__ring_push((void**)&(ring), &v); \
+} while(0)
+void __ring_push_mult_n(void** ring_ptr, size_t n, void** mult) {
+	assert(*ring_ptr);
+	__RingBufHeader* head = RINGBUF_GET_HEADER(*ring_ptr);
+	if (head->len + n >= head->cap) {
+		__ring_expand(ring_ptr, n);
+		head = RINGBUF_GET_HEADER(*ring_ptr);
+	}
+
+	for (size_t i = 0; i < n; ++i) {
+		if (head->len == 0) { head->end = 0; head->start = 0; }
+		memcpy(__DATA_GET_AT(head, *ring_ptr, head->end), __DATA_GET_AT(head, mult, head->end), head->size);
+		head->end++;
+		if (head->end == head->cap) { head->end = 0; }
+
+		head->len++;
+	}
+}
+#define ring_push_mult_n(ring, n, mult) __ring_push_mult_n((void**)&(ring), n, mult);
+#define ring_push_mult(ring, ...) do { \
+	typeof(*ring) mult[] = { __VA_ARGS__ }; \
+	ring_push_mult_n(ring, sizeof(*mult)/sizeof(mult), mult); \
+} while (0)
+void* __ring_pop(void* ring) {
+	assert(ring);
+
+	__RingBufHeader* head = RINGBUF_GET_HEADER(ring);
+	if (!head->len) { return NULL; }
+	void* ret = __temp_alloc_deleted(head->size, __DATA_GET_AT(head, ring, head->start), head->is_ptr, head->defer_fn);
+	++head->start;
+	--head->len;
+	if (head->start == head->cap) { head->start = 0; }
+
+	return ret;
+}
+#define ring_pop(ring) (typeof(*ring)*)__ring_pop(ring)
+void ring_free(void* ring) {
+	assert(ring);
+
+	__RingBufHeader* head = RINGBUF_GET_HEADER(ring);
+	if (head->defer_fn) {
+		if (!head->is_ptr) {
+			ring_foreach(val, ring) {
+				head->defer_fn(val);
+			}
+		} else {
+			ring_foreach(val, ring) {
+				head->defer_fn(*(void**)val);
+			}
+		}
+	}
+	free(head);
+}
+void ring_print(const void* ring) {
+	assert(ring);
+
+	__RingBufHeader* head = RINGBUF_GET_HEADER(ring);
+	printf("[ ");
+	char started = 0;
+	ring_foreach(val, ring) {
+		if (started) { printf(", "); } else { started = 1; }
+		head->print_fn(!head->is_ptr ? val : *(void**)val);
+	}
+	printf(" ]");
+}
 
 // additional functions for examples
 int int_compare(const void* a, const void* b) {
@@ -1372,6 +1645,7 @@ typedef struct { char* key; int* value; } KV2;
 // examples
 int main() {
 	srand(time(NULL));
+	
 	// int array example
 	printf("Array examples:\n"); {
 		int* array = array_new(int, .cmp_fn = int_compare, .print_fn = int_print);
@@ -1506,7 +1780,6 @@ int main() {
 		hashset_print(set_res);
 		hashset_free(set_res);
 		putchar('\n');
-		
 
 		hashset_free(set1);
 		hashset_free(set2);
@@ -1600,16 +1873,46 @@ int main() {
 		binheap_print(int_heap);
 		putchar('\n');
 
-		int* extracted = NULL;
 		printf("Extracted: [ ");
 		char started = 0;
-		while ((extracted = binheap_extract(int_heap))) {
+		binheap_drain(extracted, int_heap) {
 			if (started) { printf(", "); } else { started = 1; }
 			printf("%d", *extracted);
 		}
 		printf(" ]\n");
 
+		for (size_t i = 0; i < 10; ++i) {
+			binheap_insert(int_heap, rand() % 20 - 10);
+		}
+		binheap_print(int_heap);
+		putchar('\n');
+		for (int i = -5; i < 5; ++i) {
+			binheap_remove(int_heap, i);
+		}
+		binheap_print(int_heap);
+		putchar('\n');
+
 		binheap_free(int_heap);
+	}
+
+	// ring buffer example
+	printf("\nRingBuffer examples:\n"); {
+		int* int_ring = ring_new(int, .print_fn = int_print);
+		for (size_t i = 0; i < 10; ++i) {
+			ring_push(int_ring, rand() % 100);
+		}
+		ring_print(int_ring);
+		putchar('\n');
+		
+		printf("Extracted: [ ");
+		char started = 0;
+		ring_drain(extracted, int_ring) {
+			if (started) { printf(", "); } else { started = 1; }
+			printf("%d", *extracted);
+		}
+		printf(" ]\n");
+
+		ring_free(int_ring);
 	}
 
 	return 0;
